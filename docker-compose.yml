@@ -1,0 +1,123 @@
+services:
+
+  postgres:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_DB: jobplatform
+      POSTGRES_USER:
+      POSTGRES_PASSWORD:
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    restart: always
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | timeout 2 nc -w 2 localhost 2181 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    restart: always
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+
+  control-plane:
+    build: ./control-plane
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/jobplatform
+      SPRING_DATASOURCE_USERNAME:
+      SPRING_DATASOURCE_PASSWORD:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  worker-us-east:
+    build: ./worker
+    restart: always
+    depends_on:
+      kafka:
+        condition: service_healthy
+      control-plane:
+        condition: service_healthy
+    environment:
+      WORKER_REGION: US_EAST
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      CONTROL_PLANE_BASE_URL: http://control-plane:8080
+
+  worker-eu-west:
+    build: ./worker
+    restart: always
+    depends_on:
+      kafka:
+        condition: service_healthy
+      control-plane:
+        condition: service_healthy
+    environment:
+      WORKER_REGION: EU_WEST
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      CONTROL_PLANE_BASE_URL: http://control-plane:8080
+
+  worker-ap-south:
+    build: ./worker
+    restart: always
+    depends_on:
+      kafka:
+        condition: service_healthy
+      control-plane:
+        condition: service_healthy
+    environment:
+      WORKER_REGION: AP_SOUTH
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      CONTROL_PLANE_BASE_URL: http://control-plane:8080
+
+  dashboard:
+    build: ./dashboard
+    restart: always
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    ports:
+      - "5173:5173"
